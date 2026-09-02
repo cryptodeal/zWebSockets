@@ -336,7 +336,7 @@ pub fn HttpRouter(comptime UserData: type) type {
 
 test "Method Priority" {
     const allocator = std.testing.allocator;
-    var r: HttpRouter(i32) = try .init(allocator);
+    var r = try HttpRouter(i32).init(allocator);
     defer r.deinit(allocator);
     var result: std.ArrayList(u8) = .empty;
     defer result.deinit(allocator);
@@ -405,7 +405,7 @@ test "Method Priority" {
 
 test "Deep Parameter Routes" {
     const allocator = std.testing.allocator;
-    var r: HttpRouter(i32) = try .init(allocator);
+    var r = try HttpRouter(i32).init(allocator);
     defer r.deinit(allocator);
     var result: std.ArrayList(u8) = .empty;
     defer result.deinit(allocator);
@@ -465,7 +465,7 @@ test "Deep Parameter Routes" {
 
 test "Pattern Priority" {
     const allocator = std.testing.allocator;
-    var r: HttpRouter(i32) = try .init(allocator);
+    var r = try HttpRouter(i32).init(allocator);
     defer r.deinit(allocator);
     var result: std.ArrayList(u8) = .empty;
     defer result.deinit(allocator);
@@ -570,7 +570,7 @@ test "Pattern Priority" {
 
 test "Upgrade" {
     const allocator = std.testing.allocator;
-    var r: HttpRouter(i32) = try .init(allocator);
+    var r = try HttpRouter(i32).init(allocator);
     defer r.deinit(allocator);
     var result: std.ArrayList(u8) = .empty;
     defer result.deinit(allocator);
@@ -632,7 +632,7 @@ test "Bug Reports" {
     const allocator = std.testing.allocator;
 
     {
-        var r: HttpRouter(i32) = try .init(allocator);
+        var r = try HttpRouter(i32).init(allocator);
         defer r.deinit(allocator);
         var result: std.ArrayList(u8) = .empty;
         defer result.deinit(allocator);
@@ -682,7 +682,7 @@ test "Bug Reports" {
         try std.testing.expectEqualStrings("", result.items);
     }
     {
-        var r: HttpRouter(i32) = try .init(allocator);
+        var r = try HttpRouter(i32).init(allocator);
         defer r.deinit(allocator);
         var result: std.ArrayList(u8) = .empty;
         defer result.deinit(allocator);
@@ -722,7 +722,7 @@ test "Bug Reports" {
         try std.testing.expectEqualStrings("FOOMANYSLASH", result.items);
     }
     {
-        var r: HttpRouter(i32) = try .init(allocator);
+        var r = try HttpRouter(i32).init(allocator);
         defer r.deinit(allocator);
         var result: std.ArrayList(u8) = .empty;
         defer result.deinit(allocator);
@@ -745,7 +745,7 @@ test "Bug Reports" {
     }
 
     {
-        var r: HttpRouter(i32) = try .init(allocator);
+        var r = try HttpRouter(i32).init(allocator);
         defer r.deinit(allocator);
         var result: std.ArrayList(u8) = .empty;
         defer result.deinit(allocator);
@@ -797,7 +797,7 @@ test "Bug Reports" {
     }
 
     {
-        var r: HttpRouter(i32) = try .init(allocator);
+        var r = try HttpRouter(i32).init(allocator);
         defer r.deinit(allocator);
         var result: std.ArrayList(u8) = .empty;
         defer result.deinit(allocator);
@@ -835,7 +835,7 @@ test "Bug Reports" {
     }
 
     {
-        var r: HttpRouter(i32) = try .init(allocator);
+        var r = try HttpRouter(i32).init(allocator);
         defer r.deinit(allocator);
         var result: std.ArrayList(u8) = .empty;
         defer result.deinit(allocator);
@@ -887,7 +887,7 @@ test "Bug Reports" {
     }
 
     {
-        var r: HttpRouter(i32) = try .init(allocator);
+        var r = try HttpRouter(i32).init(allocator);
         defer r.deinit(allocator);
         var result: std.ArrayList(u8) = .empty;
         defer result.deinit(allocator);
@@ -953,7 +953,7 @@ test "Bug Reports" {
     }
 
     {
-        var r: HttpRouter(i32) = try .init(allocator);
+        var r = try HttpRouter(i32).init(allocator);
         defer r.deinit(allocator);
         var result: std.ArrayList(u8) = .empty;
         defer result.deinit(allocator);
@@ -1005,7 +1005,7 @@ test "Bug Reports" {
     }
 
     {
-        var r: HttpRouter(i32) = try .init(allocator);
+        var r = try HttpRouter(i32).init(allocator);
         defer r.deinit(allocator);
         var result: std.ArrayList(u8) = .empty;
         defer result.deinit(allocator);
@@ -1045,7 +1045,7 @@ test "Bug Reports" {
 
 test "Parameters" {
     const allocator = std.testing.allocator;
-    var r: HttpRouter(i32) = try .init(allocator);
+    var r = try HttpRouter(i32).init(allocator);
     defer r.deinit(allocator);
     var result: std.ArrayList(u8) = .empty;
     defer result.deinit(allocator);
@@ -1147,7 +1147,7 @@ test "Parameters" {
 test "Performance" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
-    var r: HttpRouter(i32) = try .init(allocator);
+    var r = try HttpRouter(i32).init(allocator);
     defer r.deinit(allocator);
 
     try r.add(allocator, &.{"GET"}, "/*", .init(

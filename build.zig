@@ -42,7 +42,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .imports = &.{
             .{ .name = "zSockets", .module = b.dependency("zSockets", .{ .target = target, .optimize = optimize }).module("zSockets") },
-            .{ .name = "rbtree", .module = b.dependency("rbtree", .{ .target = target, .optimize = optimize }).module("rbtree") },
         },
         // Later on we'll use this module as the root module of a test executable
         // which requires us to specify a target.

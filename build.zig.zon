@@ -36,10 +36,6 @@
             .url = "git+https://github.com/cryptodeal/zSockets#21072748d314eca2dca8161e95ed707d4cc57590",
             .hash = "zSockets-0.0.0-cSZxI0hNGAAoAJqbpqfO8TKlLTzngSp1TJRNc1Qp-eaH",
         },
-        .rbtree = .{
-            .url = "https://github.com/alexbishop/zig-rbtree/archive/refs/tags/v1.2.0.zip",
-            .hash = "rbtree-1.2.0-lpT2030PBgDL33u_s5zZwg_FnEz_Em3v7XfY7AUjwUr2",
-        },
         .libdeflate = .{
             .url = "git+https://github.com/cryptodeal/libdeflate-zig#b23dfd5f1b6f93d443bb7038a8611d419b91e5f2",
             .hash = "libdeflate-1.18.0-1-JL5Uni2-CgCLsnByXI9xZL1PwE9zsaN02W-fNfjDDweY",
