@@ -55,23 +55,6 @@ pub const Protocol = struct {
         return val;
     }
 
-    pub fn condByteSwap(comptime T: type, value: T) T {
-        const endian_test: u32 = 1;
-        if (std.mem.asBytes(&endian_test)[0] != 0) {
-            var src: [@sizeOf(T)]u8 = undefined;
-            var dst: [@sizeOf(T)]u8 = undefined;
-
-            @memcpy(&src, std.mem.asBytes(&value));
-            for (0..@sizeOf(T)) |i| {
-                dst[i] = src[@sizeOf(T) - 1 - i];
-            }
-            var result: T = undefined;
-            @memcpy(std.mem.asBytes(&result), &dst);
-            return result;
-        }
-        return value;
-    }
-
     pub fn isValidUtf8(s: []const u8) bool {
         if (comptime env.use_simdutf) {}
         var s_ = s.ptr;
@@ -127,7 +110,7 @@ pub const Protocol = struct {
         var cf: CloseFrame = .{ .code = 1005, .message = &.{} };
         if (src.len >= 2) {
             @memcpy(std.mem.asBytes(&cf.code), src[0..2]);
-            cf = .{ .code = condByteSwap(u16, cf.code), .message = src[2..] };
+            cf = .{ .code = std.mem.nativeToBig(u16, cf.code), .message = src[2..] };
             if (cf.code < 1000 or cf.code > 4999 or (cf.code > 1011 and cf.code < 4000) or
                 (cf.code >= 1004 and cf.code <= 1006) or !isValidUtf8(cf.message))
             {
@@ -140,7 +123,7 @@ pub const Protocol = struct {
     pub inline fn formatClosePayload(dst: []u8, code: u16, message: []const u8) usize {
         var code_ = code;
         if (code_ != 0 and code_ != 1005 and code_ != 1006) {
-            code_ = condByteSwap(u16, code_);
+            code_ = std.mem.nativeToBig(u16, code_);
             @memcpy(dst[0..@sizeOf(u16)], std.mem.asBytes(&code_));
             if (message.len != 0) {
                 @memcpy(dst[2 .. 2 + message.len], message);
@@ -174,12 +157,12 @@ pub const Protocol = struct {
         } else if (reported_length <= @as(usize, @intCast(std.math.maxInt(u16)))) {
             header_length = 4;
             dst[1] = 126;
-            const tmp: u16 = condByteSwap(u16, @intCast(reported_length));
+            const tmp: u16 = std.mem.nativeToBig(u16, @intCast(reported_length));
             @memcpy(std.mem.sliceAsBytes(dst[2 .. 2 + @sizeOf(u16)]), std.mem.asBytes(&tmp));
         } else {
             header_length = 10;
             dst[1] = 127;
-            const tmp: u64 = condByteSwap(u64, reported_length);
+            const tmp: u64 = std.mem.nativeToBig(u64, reported_length);
             @memcpy(std.mem.sliceAsBytes(dst[2 .. 2 + @sizeOf(u64)]), std.mem.asBytes(&tmp));
         }
 
@@ -330,7 +313,7 @@ pub fn WebSocketProtocol(comptime is_server: bool, comptime Impl: type) type {
                 return true;
             }
 
-            if (pay_length + @as(T, @intCast(message_header)) <= @as(T, @intCast(length.*))) {
+            if (pay_length + message_header <= length.*) {
                 const fin = isFin(src.*);
                 if (comptime is_server) {
                     unmaskImpreciseCopyMask(message_header, src.*[message_header .. message_header + pay_length]);
@@ -354,7 +337,7 @@ pub fn WebSocketProtocol(comptime is_server: bool, comptime Impl: type) type {
             } else {
                 w_state.state.spill_length = 0;
                 w_state.state.wants_head = false;
-                w_state.remaining_bytes = @intCast(pay_length - @as(T, @intCast(length.*)) + @as(T, @intCast(message_header)));
+                w_state.remaining_bytes = @intCast(pay_length - length.* + message_header);
                 const fin = isFin(src.*);
                 if (comptime is_server) {
                     @memcpy(&w_state.mask, src.* + message_header);
@@ -445,12 +428,12 @@ pub fn WebSocketProtocol(comptime is_server: bool, comptime Impl: type) type {
                     } else if (payloadLength(src_) == 126) {
                         if (length < medium_message_header) {
                             break;
-                        } else if (try consumeMessage(allocator, io, medium_message_header, u16, Protocol.condByteSwap(u16, Protocol.bitCast(u16, (src_ + 2)[0..@sizeOf(u16)])), &src_, &length, w_state, user)) {
+                        } else if (try consumeMessage(allocator, io, medium_message_header, u16, std.mem.nativeToBig(u16, Protocol.bitCast(u16, (src_ + 2)[0..@sizeOf(u16)])), &src_, &length, w_state, user)) {
                             return;
                         }
                     } else if (length < long_message_header) {
                         break;
-                    } else if (try consumeMessage(allocator, io, long_message_header, u64, Protocol.condByteSwap(u64, Protocol.bitCast(u64, (src_ + 2)[0..@sizeOf(u64)])), &src_, &length, w_state, user)) {
+                    } else if (try consumeMessage(allocator, io, long_message_header, u64, std.mem.nativeToBig(u64, Protocol.bitCast(u64, (src_ + 2)[0..@sizeOf(u64)])), &src_, &length, w_state, user)) {
                         return;
                     }
                 }

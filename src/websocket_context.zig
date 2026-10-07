@@ -222,7 +222,6 @@ pub fn WebSocketContext(comptime ssl: bool, comptime is_server: bool, comptime U
                         }
                         const websocket_context_data: *WebSocketContextData(ssl, UserData) = s.context.ext[0].get(WebSocketContextData(ssl, UserData)).?;
                         const async_socket: *AsyncSocket(ssl) = @ptrCast(@alignCast(s));
-                        std.debug.print("set timeout @ websocket_context.zig:226\n", .{});
                         async_socket.timeout(websocket_context_data.idle_timeout_components[0]);
                         websocket_data.has_timed_out = false;
                         async_socket.cork();
@@ -250,7 +249,6 @@ pub fn WebSocketContext(comptime ssl: bool, comptime is_server: bool, comptime U
                         _ = try async_socket.write(a, &.{}, .{});
                         if (backpressure == 0 or backpressure > async_socket.getBufferedAmount()) {
                             const websocket_context_data: *WebSocketContextData(ssl, UserData) = s.context.ext[0].get(WebSocketContextData(ssl, UserData)).?;
-                            std.debug.print("set timeout @ websocket_context.zig:254\n", .{});
                             async_socket.timeout(websocket_context_data.idle_timeout_components[0]);
                             websocket_data.has_timed_out = false;
                         }

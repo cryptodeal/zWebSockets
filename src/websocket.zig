@@ -160,7 +160,6 @@ pub fn WebSocket(comptime ssl: bool, comptime is_server: bool, comptime UserData
                 }
             }
             if (websocket_context_data.reset_idle_timeout_on_send) {
-                std.debug.print("set timeout @ websocket.zig:165\n", .{});
                 @as(*Super, @ptrCast(@alignCast(self))).timeout(websocket_context_data.idle_timeout_components[0]);
                 websocket_data = @as(*zs.Socket, @ptrCast(@alignCast(self))).ext[0].get(WebSocketData).?;
                 websocket_data.has_timed_out = false;
@@ -185,7 +184,6 @@ pub fn WebSocket(comptime ssl: bool, comptime is_server: bool, comptime UserData
                 }
             }
             const websocket_context_data: *WebSocketContextData(ssl, UserData) = @as(*zs.Socket, @ptrCast(@alignCast(self))).context.ext[0].get(WebSocketContextData(ssl, UserData)).?;
-            std.debug.print("set timeout @ websocket.zig:190\n", .{});
             @as(*Super, @ptrCast(@alignCast(self))).timeout(websocket_context_data.idle_timeout_components[1]);
             if (websocket_data.subscriber) |subscriber| {
                 if (websocket_context_data.subscription_handler) |*sub_handler| {
