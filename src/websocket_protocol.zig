@@ -79,7 +79,7 @@ pub const Protocol = struct {
         while (s_ != e) {
             if (@intFromPtr(s_ + 16) <= @intFromPtr(e)) {
                 var tmp: [2]u64 = undefined;
-                @memcpy(std.mem.sliceAsBytes(&tmp), s);
+                @memcpy(std.mem.sliceAsBytes(&tmp), s_[0..16]);
                 if (((tmp[0] & 0x8080808080808080) | (tmp[1] & 0x8080808080808080)) == 0) {
                     s_ += 16;
                     continue;
@@ -93,7 +93,7 @@ pub const Protocol = struct {
             }
 
             if ((s_[0] & 0x60) == 0x40) {
-                if (@intFromPtr(s_ + 1) >= @intFromPtr(e) or (s[1] & 0xc0) != 0x80 or (s_[0] & 0xfe) == 0xc0) {
+                if (@intFromPtr(s_ + 1) >= @intFromPtr(e) or (s_[1] & 0xc0) != 0x80 or (s_[0] & 0xfe) == 0xc0) {
                     return false;
                 }
                 s_ += 2;
