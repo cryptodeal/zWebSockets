@@ -45,7 +45,7 @@ pub fn HttpContext(comptime ssl: bool) type {
 
         fn internalInit(self: *Self) *Self {
             self.getSocketContext().setOnOpen(ssl, (struct {
-                pub fn call(_: std.mem.Allocator, _: std.Io, s: *zs.Socket, _: bool, ip: []u8) !*zs.Socket {
+                pub fn call(allocator: std.mem.Allocator, io: std.Io, s: *zs.Socket, _: bool, ip: []u8) !*zs.Socket {
                     s.setTimeout(ssl, http_idle_timeout_s);
                     s.ext[0].get(HttpResponseData(ssl)).?.* = .{
                         .async_socket_data = .{},
@@ -64,7 +64,7 @@ pub fn HttpContext(comptime ssl: bool) type {
 
                     const http_context_data = getSocketContextDataS(s);
                     for (http_context_data.filter_handlers.items) |*f| {
-                        f.call(.{ @as(*HttpResponse(ssl), @ptrCast(@alignCast(s))), 1 });
+                        try f.call(.{ allocator, io, @as(*HttpResponse(ssl), @ptrCast(@alignCast(s))), 1 });
                     }
                     return s;
                 }
@@ -75,7 +75,7 @@ pub fn HttpContext(comptime ssl: bool) type {
                     const http_response_data: *HttpResponseData(ssl) = s.ext[0].get(HttpResponseData(ssl)).?;
                     const http_context_data = getSocketContextDataS(s);
                     for (http_context_data.filter_handlers.items) |*f| {
-                        f.call(.{ @as(*HttpResponse(ssl), @ptrCast(@alignCast(s))), -1 });
+                        try f.call(.{ allocator, io, @as(*HttpResponse(ssl), @ptrCast(@alignCast(s))), -1 });
                     }
                     if (http_response_data.on_aborted) |*on_aborted| {
                         try on_aborted.call(.{ allocator, io });
@@ -292,7 +292,7 @@ pub fn HttpContext(comptime ssl: bool) type {
             self.getSocketContext().deinit(allocator);
         }
 
-        pub fn filter(self: *Self, allocator: std.mem.Allocator, filter_fn: Lambda(?*anyopaque, &.{ HttpResponse(ssl), i32 }, void)) !void {
+        pub fn filter(self: *Self, allocator: std.mem.Allocator, filter_fn: Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io, HttpResponse(ssl), i32 }, anyerror!void)) !void {
             try self.getSocketContextData().filter_handlers.append(allocator, filter_fn);
         }
 

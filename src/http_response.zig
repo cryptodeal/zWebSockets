@@ -363,6 +363,7 @@ pub fn HttpResponse(comptime ssl: bool) type {
             }
 
             pub fn cork(self: *Self, allocator: std.mem.Allocator, io: std.Io, handler: Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io }, anyerror!void)) !*Self {
+                defer handler.deinit(allocator);
                 if (!@as(*Super, @ptrCast(@alignCast(self))).isCorked() and @as(*Super, @ptrCast(@alignCast(self))).canCork()) {
                     const loop_data = @as(*Super, @ptrCast(@alignCast(self))).getLoopData();
                     const pre_cork_context = @as(*zs.Socket, @ptrCast(@alignCast(self))).context;
@@ -443,7 +444,6 @@ pub fn HttpResponse(comptime ssl: bool) type {
 
             pub fn onDataV2(self: *Self, allocator: std.mem.Allocator, handler: ?Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io, []const u8, u64 }, anyerror!void)) void {
                 const data: *HttpResponseData(ssl) = self.getHttpResponseData();
-                // free any existing lambda (might not be necessary)
                 if (data.in_stream) |in_stream| {
                     in_stream.deinit(allocator);
                 }
@@ -761,6 +761,7 @@ pub fn HttpResponse(comptime ssl: bool) type {
             }
 
             pub fn cork(self: *Self, allocator: std.mem.Allocator, io: std.Io, handler: Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io }, anyerror!void)) !*Self {
+                defer handler.deinit(allocator);
                 if (!@as(*Super, @ptrCast(@alignCast(self))).isCorked() and @as(*Super, @ptrCast(@alignCast(self))).canCork()) {
                     const loop_data = @as(*Super, @ptrCast(@alignCast(self))).getLoopData();
                     const pre_cork_context = @as(*zs.Socket, @ptrCast(@alignCast(self))).context;
@@ -841,7 +842,6 @@ pub fn HttpResponse(comptime ssl: bool) type {
 
             pub fn onDataV2(self: *Self, allocator: std.mem.Allocator, handler: ?Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io, []const u8, u64 }, anyerror!void)) void {
                 const data: *HttpResponseData(ssl) = self.getHttpResponseData();
-                // free any existing lambda (might not be necessary)
                 if (data.in_stream) |*in_stream| {
                     in_stream.deinit(allocator);
                 }

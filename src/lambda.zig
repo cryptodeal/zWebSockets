@@ -28,7 +28,7 @@ pub fn Lambda(comptime Context: type, comptime ParamTypes: []const type, comptim
             };
         }
 
-        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
             if (self.deinit_) |deinit_| deinit_(allocator, self.context);
         }
 

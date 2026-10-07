@@ -41,7 +41,7 @@ pub fn LocalCluster(comptime AppType: type) type {
                 _ = try self.receiving_app.adoptSocket(allocator, io, self.fd, self.ip_store);
             }
         };
-
+        // TODO: should be handled on a per instance basis in case of multiple clusters
         var round_robin: usize = 0;
         var hardware_concurrency: usize = undefined;
         var threads: std.ArrayList(std.Thread) = .empty;
@@ -74,6 +74,7 @@ pub fn LocalCluster(comptime AppType: type) type {
         }
 
         pub fn init(allocator: std.mem.Allocator, io: std.Io, options: zs.SocketContextOptions, cb: Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io, *AppType }, anyerror!void)) !void {
+            defer cb.deinit(allocator);
             hardware_concurrency = try std.Thread.getCpuCount();
             try threads.ensureTotalCapacity(allocator, hardware_concurrency);
             threads.expandToCapacity();

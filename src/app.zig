@@ -75,13 +75,14 @@ pub fn TemplatedApp(comptime ssl: bool) type {
             return self;
         }
 
-        pub fn missingServerName(self: *Self, handler: Lambda(?*anyopaque, &.{[:0]const u8}, void)) *Self {
+        pub fn missingServerName(self: *Self, allocator: std.mem.Allocator, io: std.Io, handler: Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io, [:0]const u8 }, anyerror!void)) *Self {
             if (!self.constructionFailed()) {
+                if (self.http_context.getSocketContextData().missing_server_name_handler) |msnh| msnh.deinit(allocator);
                 self.http_context.getSocketContextData().missing_server_name_handler = handler;
                 @as(*zs.SocketContext, @ptrCast(@alignCast(self.http_context))).setOnServerName(ssl, (struct {
                     pub fn call(context: *zs.SocketContext, hostname: [:0]const u8) void {
                         const http_context: *HttpContext(ssl) = @ptrCast(@alignCast(context));
-                        http_context.getSocketContextData().missing_server_name_handler.call(.{hostname});
+                        try http_context.getSocketContextData().missing_server_name_handler.call(.{ allocator, io, hostname });
                     }
                 }).call);
             }
@@ -92,8 +93,8 @@ pub fn TemplatedApp(comptime ssl: bool) type {
             return @as(*zs.SocketContext, @ptrCast(@alignCast(self.http_context))).getNativeHandle(ssl);
         }
 
-        pub fn filter(self: *Self, allocator: std.mem.Allocator, filter_handler: Lambda(?*anyopaque, &.{ HttpResponse(ssl), i32 }, void)) !*Self {
-            try self.http_context.filter(allocator, filter_handler);
+        pub fn filter(self: *Self, allocator: std.mem.Allocator, filter_handler: Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io, HttpResponse(ssl), i32 }, anyerror!void)) !*Self {
+            try self.http_context.?.filter(allocator, filter_handler);
             return self;
         }
 

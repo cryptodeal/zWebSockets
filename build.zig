@@ -389,9 +389,11 @@ pub fn build(b: *std.Build) void {
 
     const examples_ci_build_step = b.step("examples", "Build examples for CI");
     const crc32_ci_install = b.addInstallArtifact(crc32_exe, .{});
+    const echo_server_ci_install = b.addInstallArtifact(echo_server_exe, .{});
     const echo_body_ci_install = b.addInstallArtifact(echo_body_exe, .{});
     examples_ci_build_step.dependOn(&crc32_ci_install.step);
     examples_ci_build_step.dependOn(&echo_body_ci_install.step);
+    examples_ci_build_step.dependOn(&echo_server_ci_install.step);
 
     if (b.args) |args| {
         broadcast_run_cmd.addArgs(args);

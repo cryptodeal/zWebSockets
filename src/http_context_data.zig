@@ -15,8 +15,8 @@ pub fn HttpContextData(comptime ssl: bool) type {
             http_request: *HttpRequest,
         };
 
-        filter_handlers: std.ArrayList(Lambda(?*anyopaque, &.{ *HttpResponse(ssl), i32 }, void)) = .empty,
-        missing_server_name_handler: ?Lambda(?*anyopaque, &.{[:0]const u8}, void) = null,
+        filter_handlers: std.ArrayList(Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io, *HttpResponse(ssl), i32 }, anyerror!void)) = .empty,
+        missing_server_name_handler: ?Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io, [:0]const u8 }, anyerror!void) = null,
         router: HttpRouter(RouterData) = undefined,
         current_router: *HttpRouter(RouterData) = undefined,
         upgraded_websocket: ?*anyopaque = null,
@@ -30,13 +30,9 @@ pub fn HttpContextData(comptime ssl: bool) type {
         }
 
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            for (self.filter_handlers.items) |*item| {
-                item.deinit(allocator);
-            }
+            for (self.filter_handlers.items) |item| item.deinit(allocator);
             self.filter_handlers.deinit(allocator);
-            if (self.missing_server_name_handler) |*missing_server_name_handler| {
-                missing_server_name_handler.deinit(allocator);
-            }
+            if (self.missing_server_name_handler) |missing_server_name_handler| missing_server_name_handler.deinit(allocator);
             self.router.deinit(allocator);
             // TODO: maybe free `upgraded_websocket`?
             // TODO: maybe need to iterate and free `child_apps.items`?

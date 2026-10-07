@@ -56,3 +56,7 @@ jobs:
           deno run --allow-net tests/fragment_test.ts --host localhost --port 3000
           deno run --allow-net h1spec/http_test.ts localhost 3000
           pkill echo_body
+
+      - name: Autobahn|Testsuite
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: deno run -A --unstable autobahn/server-test.js

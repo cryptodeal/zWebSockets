@@ -2,7 +2,6 @@ const std = @import("std");
 const zws = @import("zWebSockets");
 const zs = @import("zSockets");
 
-// TODO: HTTP Cache needs testing to verify no allocations are leaking
 pub fn main(init: std.process.Init) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);

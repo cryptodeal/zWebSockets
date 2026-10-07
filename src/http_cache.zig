@@ -12,8 +12,6 @@ pub const HttpCacheOptions = struct {
     upper_expiry: u32,
 };
 
-// TODO: need to test to ensure allocations are all freed
-
 pub fn HttpCache(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -101,8 +99,9 @@ pub fn HttpCache(comptime T: type) type {
 
                 var iter = self.waiting_http_responses.keyIterator();
                 while (iter.next()) |dependent_res| {
+                    var c: CbCtx = .{ .entry = self, .res = dependent_res.* };
                     _ = try dependent_res.*.cork(allocator, io, .init(
-                        try CbCtx.init(allocator, self, dependent_res.*),
+                        &c,
                         (struct {
                             pub fn call(ctx: ?*anyopaque, allocator_: std.mem.Allocator, io_: std.Io) !void {
                                 const cb_ctx: *CbCtx = @ptrCast(@alignCast(ctx));
@@ -116,7 +115,7 @@ pub fn HttpCache(comptime T: type) type {
                                 try cb_ctx.res.end(allocator_, io_, cb_ctx.entry.buffer[0].items, false);
                             }
                         }).call,
-                        CbCtx.deinit,
+                        null,
                     ));
                 }
                 self.waiting_http_responses.clearRetainingCapacity();
@@ -171,12 +170,13 @@ pub fn HttpCache(comptime T: type) type {
                 try self.cache_entry.markUpdated(allocator, io);
             }
 
-            pub fn onAborted(self: *HttpCacheResponse, handler: Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io }, anyerror!void)) *HttpCacheResponse {
-                _ = handler;
+            pub fn onAborted(self: *HttpCacheResponse, allocator: std.mem.Allocator, handler: Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io }, anyerror!void)) *HttpCacheResponse {
+                handler.deinit(allocator);
                 return self;
             }
 
-            pub fn cork(self: *HttpCacheResponse, allocator: std.mem.Allocator, io: std.Io, handler: Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io }, anyerror!void)) !void {
+            pub fn cork(self: *HttpCacheResponse, allocator: std.mem.Allocator, io: std.Io, handler: Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io }, anyerror!void)) !*HttpCacheResponse {
+                defer handler.deinit(allocator);
                 try handler.call(.{ allocator, io });
                 return self;
             }

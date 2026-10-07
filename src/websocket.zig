@@ -214,10 +214,11 @@ pub fn WebSocket(comptime ssl: bool, comptime is_server: bool, comptime UserData
             return @as(*Super, @ptrCast(@alignCast(self))).isCorked();
         }
 
-        pub fn cork(self: *Self, allocator: std.mem.Allocator, handler: Lambda(?*anyopaque, &.{}, void)) !void {
+        pub fn cork(self: *Self, allocator: std.mem.Allocator, io: std.Io, handler: Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io }, anyerror!void)) !void {
+            defer handler.deinit(allocator);
             if (!@as(*Super, @ptrCast(@alignCast(self))).isCorked() and @as(*Super, @ptrCast(@alignCast(self))).canCork()) {
                 @as(*Super, @ptrCast(@alignCast(self))).cork();
-                handler.call(.{});
+                try handler.call(.{ allocator, io });
                 _, _ = try @as(*Super, @ptrCast(@alignCast(self))).uncork(allocator, null, false);
             } else {
                 handler.call(.{});
@@ -265,14 +266,15 @@ pub fn WebSocket(comptime ssl: bool, comptime is_server: bool, comptime UserData
             } else return false;
         }
 
-        pub fn iterateTopics(self: *Self, cb: Lambda(?*anyopaque, &.{[]const u8}, void)) void {
+        pub fn iterateTopics(self: *Self, allocator: std.mem.Allocator, io: std.Io, cb: Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io, []const u8 }, anyerror!void)) void {
+            defer cb.deinit(allocator);
             const websocket_context_data: *WebSocketContextData(ssl, UserData) = @as(*zs.Socket, @ptrCast(@alignCast(self))).context.ext[0].get(WebSocketContextData(ssl, UserData)).?;
             const websocket_data: *WebSocketData = @as(*zs.Socket, @ptrCast(@alignCast(self))).ext[0].get(WebSocketData).?;
             if (websocket_data.subscriber) |subscriber| {
                 websocket_context_data.topic_tree.iterating_subscriber = subscriber;
                 var iter = subscriber.topics.keyIterator();
                 while (iter.next()) |t| {
-                    cb.call(.{t.*.name});
+                    try cb.call(.{ allocator, io, t.*.name });
                 }
                 websocket_context_data.topic_tree.iterating_subscriber = null;
             }
