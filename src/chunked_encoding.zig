@@ -1,44 +1,48 @@
 const std = @import("std");
 
-pub const state_has_size: u64 = @as(u64, 1) << (@sizeOf(u64) * 8 - 1); //0x80000000;
-pub const state_is_chunked: u64 = @as(u64, 1) << (@sizeOf(u64) * 8 - 2); //0x40000000;
-pub const state_size_mask: u64 = ~(@as(u64, 3) << (@sizeOf(u64) * 8 - 2)); //0x3FFFFFFF;
-pub const state_is_error: u64 = ~@as(u64, 0); //0xFFFFFFFF;
-pub const state_size_overflow: u64 = @as(u64, 0x0F) << (@sizeOf(u64) * 8 - 8); //0x0F000000;
+pub const state_has_size = @as(u64, 1) << (@sizeOf(u64) * 8 - 1);
+pub const state_is_chunked: u64 = @as(u64, 1) << (@sizeOf(u64) * 8 - 2);
+
+pub const state_extension_mode: u64 = @as(u64, 1) << (@sizeOf(u64) * 8 - 3);
+pub const state_trailer_mode: u64 = @as(u64, 1) << (@sizeOf(u64) * 8 - 4);
+pub const state_extension_expects_name = @as(u64, 1) << (@sizeOf(u64) * 8 - 5);
+pub const state_extension_quoted = @as(u64, 1) << (@sizeOf(u64) * 8 - 6);
+pub const state_extension_expects_lf = @as(u64, 1) << (@sizeOf(u64) * 8 - 7);
+pub const state_extension_in_name = @as(u64, 1) << (@sizeOf(u64) * 8 - 8);
+
+pub const state_size_mask: u64 = ~(@as(u64, 0xFF) << (@sizeOf(u64) * 8 - 8));
+pub const state_is_error: u64 = ~@as(u64, 0);
+pub const state_size_overflow: u64 = @as(u64, 0x0F) << (@sizeOf(u64) * 8 - 12);
+
+inline fn isValidTokenChar(c: u8) bool {
+    if (c < 0x20 or c >= 0x7F) return false;
+    return switch (c) {
+        '(',
+        ')',
+        '<',
+        '>',
+        '@',
+        ',',
+        ';',
+        ':',
+        '\\',
+        '"',
+        '/',
+        '[',
+        ']',
+        '?',
+        '=',
+        '{',
+        '}',
+        ' ',
+        '\t',
+        => false,
+        else => true,
+    };
+}
 
 inline fn chunkSize(state: u64) u64 {
     return state & state_size_mask;
-}
-
-// TODO: need to update `data` in place
-inline fn consumeHexNumber(data: *[]const u8, state: *u64) void {
-    while (data.*.len != 0 and data.*[0] > 32) {
-        var digit = data.*[0];
-        if (digit >= 'a') {
-            digit = digit - ('a' - ':');
-        } else if (digit >= 'A') {
-            digit = digit - ('A' - ':');
-        }
-
-        const number = @as(u32, @intCast(digit)) - @as(u32, @intCast('0'));
-        if (number > 16 or (chunkSize(state.*) & state_size_overflow) != 0) {
-            state.* = state_is_error;
-            return;
-        }
-
-        const bits = state_is_chunked;
-        state.* = (state.* & state_size_mask) * @as(u64, 16) + number;
-        state.* |= bits;
-        data.* = data.*[1..];
-    }
-    while (data.*.len != 0 and data.*[0] != '\n') {
-        data.* = data.*[1..];
-    }
-    if (data.*.len != 0) {
-        state.* += 2;
-        state.* |= state_has_size | state_is_chunked;
-        data.* = data.*[1..];
-    }
 }
 
 inline fn decChunkSize(state: *u64, by: u32) void {
@@ -57,10 +61,155 @@ pub inline fn isParsingInvalidChunkedEncoding(state: u64) bool {
     return state == state_is_error;
 }
 
-fn getNextChunk(data: *[]const u8, state: *u64, trailer: bool) ?[]const u8 {
+inline fn consumeHexNumber(data: *[]const u8, state: *u64) void {
     while (data.*.len != 0) {
+        const c = data.*[0];
+        if ((state.* & state_extension_mode) == 0) {
+            if (c == ';') {
+                if (!hasChunkSize(state.*) and (state.* & state_size_mask) == 0 and (state.* & state_is_chunked) == 0) {
+                    state.* = state_is_error;
+                    return;
+                }
+                state.* |= state_extension_mode | state_extension_expects_name;
+                data.* = data.*[1..];
+                continue;
+            }
+            if (c == '\r') {
+                state.* |= state_extension_mode | state_extension_expects_lf;
+                data.* = data.*[1..];
+                continue;
+            }
+            if (c == '\n') {
+                data.* = data.*[1..];
+                state.* += 2;
+                state.* |= state_has_size | state_is_chunked;
+                state.* &= ~(state_extension_mode | state_extension_expects_name | state_extension_in_name | state_extension_quoted | state_extension_expects_lf);
+                return;
+            }
+            var number: u32 = 0;
+            if (c >= '0' and c <= '9')
+                number = c - '0'
+            else if (c >= 'a' and c <= 'f')
+                number = c - 'a' + 10
+            else if (c >= 'A' and c <= 'F')
+                number = c - 'A' + 10
+            else {
+                state.* = state_is_error;
+                return;
+            }
+
+            if ((chunkSize(state.*) & state_size_overflow) != 0) {
+                state.* = state_is_error;
+                return;
+            }
+            const bits = state.* & state_is_chunked;
+            state.* = (state.* & state_size_mask) * @as(u64, 16) + number;
+            state.* |= bits;
+            data.* = data.*[1..];
+        } else {
+            if ((state.* & state_extension_expects_lf) != 0) {
+                if (c != '\n') {
+                    state.* = state_is_error;
+                    return;
+                }
+                data.* = data.*[1..];
+                state.* += 2;
+                state.* |= state_has_size | state_is_chunked;
+                state.* &= ~(state_extension_mode | state_extension_expects_name | state_extension_in_name | state_extension_quoted | state_extension_expects_lf);
+                return;
+            }
+            if (c == 0x00 or (c < 0x20 and c != '\r' and c != '\n' and c != '\t')) {
+                state.* = state_is_error;
+                return;
+            }
+            if (c == '\r') {
+                if ((state.* & state_extension_expects_name) != 0) {
+                    state.* = state_is_error;
+                    return;
+                }
+                state.* |= state_extension_expects_lf;
+                data.* = data.*[1..];
+                continue;
+            }
+            if ((state.* & state_extension_expects_name) != 0) {
+                if (!isValidTokenChar(c)) {
+                    state.* = state_is_error;
+                    return;
+                }
+                state.* &= ~state_extension_expects_name;
+                state.* |= state_extension_in_name;
+            } else if ((state.* & state_extension_in_name) != 0) {
+                if (c == '=')
+                    state.* &= ~state_extension_in_name
+                else if (c == ';') {
+                    state.* &= ~state_extension_in_name;
+                    state.* |= state_extension_expects_name;
+                } else if (!isValidTokenChar(c)) {
+                    state.* = state_is_error;
+                    return;
+                }
+            } else {
+                if (c == '"') state.* ^= state_extension_quoted;
+                if (c == ';' and (state.* & state_extension_quoted) == 0) state.* |= state_extension_expects_name;
+            }
+            data.* = data.*[1..];
+            if (c == '\n' and (state.* & state_extension_quoted) == 0) {
+                if ((state.* & state_extension_expects_name) != 0) {
+                    state.* = state_is_error;
+                    return;
+                }
+                state.* += 2;
+                state.* |= state_has_size | state_is_chunked;
+                state.* &= ~(state_extension_mode | state_extension_expects_name | state_extension_in_name | state_extension_quoted | state_extension_expects_lf);
+                return;
+            }
+        }
+    }
+}
+
+fn getNextChunk(data: *[]const u8, state: *u64, trailer: bool) ?[]const u8 {
+    while (data.len != 0) {
+        if ((state.* & state_trailer_mode) != 0) {
+            while (data.len != 0) {
+                const c = data.*[0];
+                data.* = data.*[1..];
+                switch (chunkSize(state.*)) {
+                    0 => {
+                        if (c == '\r')
+                            state.* = (state.* & ~state_size_mask) | 1
+                        else if (c == '\n') {
+                            state.* = state_is_error;
+                            return null;
+                        } else state.* = (state.* & ~state_size_mask) | 2;
+                    },
+                    1 => {
+                        if (c == '\n') {
+                            state.* = 0;
+                            return null;
+                        }
+                        state.* = state_is_error;
+                    },
+                    2 => {
+                        if (c == '\r')
+                            state.* = (state.* & ~state_size_mask) | 3
+                        else if (c == '\n') {
+                            state.* = state_is_error;
+                            return null;
+                        }
+                    },
+                    3 => {
+                        if (c == '\n')
+                            state.* = (state.* & ~state_size_mask) | 0
+                        else if (c != '\r')
+                            state.* = (state.* & ~state_size_mask) | 2;
+                    },
+                    else => {},
+                }
+            }
+            return null;
+        }
         if (((state.* & state_is_chunked) == 0) and hasChunkSize(state.*) and chunkSize(state.*) != 0) {
-            while (data.*.len != 0 and chunkSize(state.*) != 0) {
+            while (data.len != 0 and chunkSize(state.*) != 0) {
                 data.* = data.*[1..];
                 decChunkSize(state, 1);
                 if (chunkSize(state.*) == 0) {
@@ -70,7 +219,6 @@ fn getNextChunk(data: *[]const u8, state: *u64, trailer: bool) ?[]const u8 {
             }
             continue;
         }
-
         if (!hasChunkSize(state.*)) {
             consumeHexNumber(data, state);
             if (isParsingInvalidChunkedEncoding(state.*)) {
@@ -78,7 +226,7 @@ fn getNextChunk(data: *[]const u8, state: *u64, trailer: bool) ?[]const u8 {
             }
             if (hasChunkSize(state.*) and chunkSize(state.*) == 2) {
                 if (trailer) {
-                    state.* = 4 | state_has_size;
+                    state.* = state_trailer_mode | 0;
                 } else {
                     state.* = 2 | state_has_size;
                 }
@@ -86,38 +234,60 @@ fn getNextChunk(data: *[]const u8, state: *u64, trailer: bool) ?[]const u8 {
             }
             continue;
         }
-
-        if (data.*.len >= chunkSize(state.*)) {
-            var emit_soon: []const u8 = undefined;
+        if (data.len >= chunkSize(state.*)) {
+            var emit_soon: []const u8 = &.{};
             var should_emit = false;
+
             if (chunkSize(state.*) > 2) {
+                if (data.*[chunkSize(state.*) - 2] != '\r' or data.*[chunkSize(state.*) - 1] != '\n') {
+                    state.* = state_is_error;
+                    return null;
+                }
                 emit_soon = data.*[0 .. chunkSize(state.*) - 2];
                 should_emit = true;
+            } else if (chunkSize(state.*) == 2) {
+                if (data.*[0] != '\r' or data.*[1] != '\n') {
+                    state.* = state_is_error;
+                    return null;
+                }
+            } else if (chunkSize(state.*) == 1) {
+                if (data.*[0] != '\n') {
+                    state.* = state_is_error;
+                    return null;
+                }
             }
             data.* = data.*[chunkSize(state.*)..];
             state.* = state_is_chunked;
-            if (should_emit) {
-                return emit_soon;
-            }
+            if (should_emit) return emit_soon;
             continue;
         } else {
             var emit_soon: []const u8 = &.{};
             if (chunkSize(state.*) > 2) {
                 const maximal_app_emit = chunkSize(state.*) - 2;
-                if (data.*.len > maximal_app_emit) {
+                if (data.len > maximal_app_emit) {
+                    // Enforce partial CRLF boundary safety limit
+                    if (data.*[maximal_app_emit] != '\r') {
+                        state.* = state_is_error;
+                        return null;
+                    }
                     emit_soon = data.*[0..maximal_app_emit];
                 } else {
                     emit_soon = data.*;
                 }
+            } else if (chunkSize(state.*) == 2) {
+                if (data.*[0] != '\r') {
+                    state.* = state_is_error;
+                    return null;
+                }
             }
-            decChunkSize(state, @intCast(data.*.len));
+
+            decChunkSize(state, @intCast(data.len));
             state.* |= state_is_chunked;
-            data.* = data.*[data.*.len..];
-            if (emit_soon.len != 0) {
-                return emit_soon;
-            } else {
+            data.* = data.*[data.len..];
+            if (emit_soon.len != 0)
+                return emit_soon
+            else
                 return null;
-            }
         }
     }
     return null;
@@ -146,7 +316,7 @@ pub const ChunkIterator = struct {
 // test helpers
 fn consumeChunkEncoding(max_consume: usize, chunk_encoded: *[]const u8, state: *u64) !void {
     if (isParsingChunkedEncoding(state.*)) {
-        std.debug.print("already in chunked parsing state!\n", .{});
+        std.log.err("already in chunked parsing state!\n", .{});
         try std.testing.expect(false);
     }
     state.* = state_is_chunked;
@@ -157,15 +327,10 @@ fn consumeChunkEncoding(max_consume: usize, chunk_encoded: *[]const u8, state: *
         while (iterator.next()) |_| {}
         chunk_encoded.* = chunk_encoded.*[data_len_before_parsing - data.len ..];
         if (state.* == 0) {
-            if (chunk_encoded.*.len == 0 or chunk_encoded.*.len == 74) {
-                break;
-            } else {
-                try std.testing.expect(false);
-            }
-            state.* = state_is_chunked;
+            break;
         }
         if (!isParsingChunkedEncoding(state.*)) {
-            std.debug.print("not in parsing chunked state!\n", .{});
+            std.log.err("not in parsing chunked state!\n", .{});
             try std.testing.expect(false);
         }
     }
@@ -184,9 +349,10 @@ fn runBetterTest(allocator: std.mem.Allocator, max_consume: usize) !void {
     var ss: std.ArrayList(u8) = .empty;
     defer ss.deinit(allocator);
     for (chunks) |chunk| {
-        try ss.print(allocator, "{x}\r\n{s}\r\n", .{ chunk.len, chunk });
         if (chunk.len == 0) {
-            try ss.print(allocator, "\r\n", .{});
+            try ss.print(allocator, "0\r\n\r\n", .{});
+        } else {
+            try ss.print(allocator, "{x}\r\n{s}\r\n", .{ chunk.len, chunk });
         }
     }
     const buffer = ss.items;
@@ -214,9 +380,10 @@ fn runTest(allocator: std.mem.Allocator, max_consume: usize) !void {
     var ss: std.ArrayList(u8) = .empty;
     defer ss.deinit(allocator);
     for (chunks) |chunk| {
-        try ss.print(allocator, "{x}\r\n{s}\r\n", .{ chunk.len, chunk });
         if (chunk.len == 0) {
-            try ss.print(allocator, "\r\n", .{});
+            try ss.print(allocator, "0\r\n\r\n", .{});
+        } else {
+            try ss.print(allocator, "{x}\r\n{s}\r\n", .{ chunk.len, chunk });
         }
     }
     const buffer = ss.items;
@@ -230,7 +397,6 @@ fn runTest(allocator: std.mem.Allocator, max_consume: usize) !void {
         const data_length_before_parsing = data.len;
         var chunk_iterator = ChunkIterator.init(@ptrCast(&data), &state, true);
         while (chunk_iterator.next()) |chunk| {
-            // std.debug.print("<{s}>\n", .{chunk});
             try std.testing.expect(!(chunk.len == 0 and chunks[chunk_offset].len != 0));
             try std.testing.expectEqualStrings(chunks[chunk_offset][0..chunk.len], chunk);
             chunks[chunk_offset] = chunks[chunk_offset][chunk.len..];

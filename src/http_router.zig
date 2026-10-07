@@ -34,6 +34,7 @@ pub fn HttpRouter(comptime UserData: type) type {
                 for (self.children.items) |child| {
                     child.deinit(allocator);
                 }
+                // allocator.free(self.name);
                 self.children.deinit(allocator);
                 self.handlers.deinit(allocator);
                 allocator.destroy(self);
@@ -58,7 +59,7 @@ pub fn HttpRouter(comptime UserData: type) type {
             }
         };
 
-        pub const Handler = Lambda(?*anyopaque, &.{ std.mem.Allocator, *Self }, anyerror!bool);
+        pub const Handler = Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io, *Self }, anyerror!bool);
 
         user_data: UserData = undefined,
         handlers: std.ArrayList(Handler) = .empty,
@@ -134,11 +135,11 @@ pub fn HttpRouter(comptime UserData: type) type {
             return .{ self.url_segment_vector[@intCast(url_segment)], false };
         }
 
-        fn executeHandlers(self: *Self, allocator: std.mem.Allocator, parent: *Node, url_segment: i32, user_data: *UserData) !bool {
+        fn executeHandlers(self: *Self, allocator: std.mem.Allocator, io: std.Io, parent: *Node, url_segment: i32, user_data: *UserData) !bool {
             const segment, const is_stop = self.getUrlSegment(url_segment);
             if (is_stop) {
                 for (parent.handlers.items) |handler| {
-                    if (try self.handlers.items[handler & handler_mask].call(.{ allocator, self })) {
+                    if (try self.handlers.items[handler & handler_mask].call(.{ allocator, io, self })) {
                         return true;
                     }
                 }
@@ -148,18 +149,18 @@ pub fn HttpRouter(comptime UserData: type) type {
             for (parent.children.items) |p| {
                 if (p.name.len != 0 and p.name[0] == '*') {
                     for (p.handlers.items) |handler| {
-                        if (try self.handlers.items[handler & handler_mask].call(.{ allocator, self })) {
+                        if (try self.handlers.items[handler & handler_mask].call(.{ allocator, io, self })) {
                             return true;
                         }
                     }
                 } else if (p.name.len != 0 and p.name[0] == ':' and segment.len != 0) {
                     self.route_parameters.push(segment);
-                    if (try self.executeHandlers(allocator, p, url_segment + 1, user_data)) {
+                    if (try self.executeHandlers(allocator, io, p, url_segment + 1, user_data)) {
                         return true;
                     }
                     self.route_parameters.pop();
                 } else if (std.mem.eql(u8, p.name, segment)) {
-                    if (try self.executeHandlers(allocator, p, url_segment + 1, user_data)) {
+                    if (try self.executeHandlers(allocator, io, p, url_segment + 1, user_data)) {
                         return true;
                     }
                 }
@@ -198,9 +199,8 @@ pub fn HttpRouter(comptime UserData: type) type {
             return std.math.maxInt(u32);
         }
 
-        pub fn init(allocator: std.mem.Allocator) !*Self {
-            var self = try allocator.create(Self);
-            self.* = .{};
+        pub fn init(allocator: std.mem.Allocator) !Self {
+            var self: HttpRouter(UserData) = .{};
             _ = try self.getNode(allocator, &self.root, any_method_token, false);
             return self;
         }
@@ -215,7 +215,7 @@ pub fn HttpRouter(comptime UserData: type) type {
             }
             self.root.children.deinit(allocator);
             self.root.handlers.deinit(allocator);
-            allocator.destroy(self);
+            // allocator.destroy(self);
         }
 
         pub fn getParameters(self: *Self) struct { i32, [*][]const u8 } {
@@ -226,12 +226,12 @@ pub fn HttpRouter(comptime UserData: type) type {
             return &self.user_data;
         }
 
-        pub fn route(self: *Self, allocator: std.mem.Allocator, method: []const u8, url: []const u8) !bool {
+        pub fn route(self: *Self, allocator: std.mem.Allocator, io: std.Io, method: []const u8, url: []const u8) !bool {
             self.setUrl(url);
             self.route_parameters.reset();
             for (self.root.children.items) |p| {
                 if (std.mem.eql(u8, p.name, method)) {
-                    if (try self.executeHandlers(allocator, p, 0, &self.user_data)) {
+                    if (try self.executeHandlers(allocator, io, p, 0, &self.user_data)) {
                         return true;
                     } else {
                         break;
@@ -243,11 +243,11 @@ pub fn HttpRouter(comptime UserData: type) type {
                 @branchHint(.unlikely);
                 return false;
             }
-            return self.executeHandlers(allocator, self.root.children.items[self.root.children.items.len - 1], 0, &self.user_data);
+            return self.executeHandlers(allocator, io, self.root.children.items[self.root.children.items.len - 1], 0, &self.user_data);
         }
 
         pub fn add(self: *Self, allocator: std.mem.Allocator, methods: []const []const u8, pattern: []const u8, handler: Handler, priority: Priority) !void {
-            _ = self.remove(allocator, methods[0], pattern, priority);
+            _ = try self.remove(allocator, methods[0], pattern, priority);
             for (methods) |method| {
                 var node = try self.getNode(allocator, &self.root, method, false);
                 self.setUrl(pattern);
@@ -321,7 +321,7 @@ pub fn HttpRouter(comptime UserData: type) type {
             return false;
         }
 
-        pub fn remove(self: *Self, allocator: std.mem.Allocator, method: []const u8, pattern: []const u8, priority: Priority) bool {
+        pub fn remove(self: *Self, allocator: std.mem.Allocator, method: []const u8, pattern: []const u8, priority: Priority) !bool {
             const handler = self.findHandler(method, pattern, priority);
             if (handler == std.math.maxInt(u32)) {
                 return false;
@@ -344,62 +344,53 @@ test "Method Priority" {
     try r.add(allocator, &.{"*"}, "/static/route", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
-                // std.debug.print("ANY static route\n", .{});
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                 try out.appendSlice(a, "AS");
                 return true;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .low);
 
     try r.add(allocator, &.{"PATCH"}, "/static/route", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
-                // std.debug.print("PATCH static route\n", .{});
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                 try out.appendSlice(a, "PS");
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
     try r.add(allocator, &.{"GET"}, "/static/route", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
-                // std.debug.print("GET static route\n", .{});
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                 try out.appendSlice(a, "GS");
                 return true;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
-    try std.testing.expect(try r.route(allocator, "nonsense", "/static/route"));
-    try std.testing.expect((try r.route(allocator, "GET", "/static")) == false);
+    try std.testing.expect(try r.route(allocator, std.testing.io, "nonsense", "/static/route"));
+    try std.testing.expect((try r.route(allocator, std.testing.io, "GET", "/static")) == false);
     try std.testing.expectEqualStrings("AS", result.items);
 
     result.clearAndFree(allocator);
-    try std.testing.expect(try r.route(allocator, "POST", "/static/route"));
+    try std.testing.expect(try r.route(allocator, std.testing.io, "POST", "/static/route"));
     try std.testing.expectEqualStrings("AS", result.items);
 
     result.clearAndFree(allocator);
-    try std.testing.expect(try r.route(allocator, "GET", "/static/route"));
+    try std.testing.expect(try r.route(allocator, std.testing.io, "GET", "/static/route"));
     try std.testing.expectEqualStrings("GS", result.items);
 
     result.clearAndFree(allocator);
-    try std.testing.expect(try r.route(allocator, "PATCH", "/static/route"));
+    try std.testing.expect(try r.route(allocator, std.testing.io, "PATCH", "/static/route"));
     try std.testing.expectEqualStrings("PSAS", result.items);
 }
 
@@ -413,53 +404,44 @@ test "Deep Parameter Routes" {
     try r.add(allocator, &.{"GET"}, "/something/:id/sync", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
-                // std.debug.print("ANY static route\n", .{});
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                 try out.appendSlice(a, "ETT");
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
     try r.add(allocator, &.{"GET"}, "/something/:somethingId/pin", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
-                // std.debug.print("ANY static route\n", .{});
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                 try out.appendSlice(a, "TVÅ");
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
     try r.add(allocator, &.{"GET"}, "/something/:id/:attribute", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
-                // std.debug.print("ANY static route\n", .{});
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                 try out.appendSlice(a, "TRE");
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
-    try std.testing.expect((try r.route(allocator, "GET", "/something/1234/pin")) == false);
+    try std.testing.expect((try r.route(allocator, std.testing.io, "GET", "/something/1234/pin")) == false);
     try std.testing.expectEqualStrings("TVÅTRE", result.items);
 
     result.clearAndFree(allocator);
-    try std.testing.expect((try r.route(allocator, "GET", "/something/1234/sync")) == false);
+    try std.testing.expect((try r.route(allocator, std.testing.io, "GET", "/something/1234/sync")) == false);
     try std.testing.expectEqualStrings("ETTTRE", result.items);
 }
 
@@ -473,98 +455,80 @@ test "Pattern Priority" {
     try r.add(allocator, &.{"*"}, "/a/b/c", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
-                // std.debug.print("ANY static route\n", .{});
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                 try out.appendSlice(a, "AS");
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .low);
 
     try r.add(allocator, &.{"GET"}, "/a/:b/c", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
-                // std.debug.print("ANY static route\n", .{});
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                 try out.appendSlice(a, "GP");
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
     try r.add(allocator, &.{"GET"}, "/a/*", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
-                // std.debug.print("ANY static route\n", .{});
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                 try out.appendSlice(a, "GW");
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
     try r.add(allocator, &.{"GET"}, "/a/b/c", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
-                // std.debug.print("ANY static route\n", .{});
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                 try out.appendSlice(a, "GS");
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
     try r.add(allocator, &.{"POST"}, "/a/:b/c", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
-                // std.debug.print("ANY static route\n", .{});
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                 try out.appendSlice(a, "PP");
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
     try r.add(allocator, &.{"*"}, "/a/:b/c", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
-                // std.debug.print("ANY static route\n", .{});
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                 try out.appendSlice(a, "AP");
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .low);
 
-    try std.testing.expect((try r.route(allocator, "POST", "/a/b/c")) == false);
+    try std.testing.expect((try r.route(allocator, std.testing.io, "POST", "/a/b/c")) == false);
     try std.testing.expectEqualStrings("PPASAP", result.items);
 
     result.clearAndFree(allocator);
-    try std.testing.expect((try r.route(allocator, "GET", "/a/b/c")) == false);
+    try std.testing.expect((try r.route(allocator, std.testing.io, "GET", "/a/b/c")) == false);
     try std.testing.expectEqualStrings("GSGPGWASAP", result.items);
 }
 
@@ -578,53 +542,44 @@ test "Upgrade" {
     try r.add(allocator, &.{"GET"}, "/something", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
-                // std.debug.print("ANY static route\n", .{});
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                 try out.appendSlice(a, "GS");
                 return true;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
     try r.add(allocator, &.{"GET"}, "/*", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
-                // std.debug.print("ANY static route\n", .{});
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                 try out.appendSlice(a, "GW");
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
     try r.add(allocator, &.{"GET"}, "/*", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
-                // std.debug.print("ANY static route\n", .{});
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                 try out.appendSlice(a, "WW");
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .high);
 
-    try std.testing.expect(try r.route(allocator, "GET", "/something"));
+    try std.testing.expect(try r.route(allocator, std.testing.io, "GET", "/something"));
     try std.testing.expectEqualStrings("WWGS", result.items);
     result.clearAndFree(allocator);
 
-    try std.testing.expect((try r.route(allocator, "GET", "/")) == false);
+    try std.testing.expect((try r.route(allocator, std.testing.io, "GET", "/")) == false);
     try std.testing.expectEqualStrings("WWGW", result.items);
 }
 
@@ -640,7 +595,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/route", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "ROUTE");
                     return true;
@@ -654,7 +609,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/route/:id", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "ROUID");
                     return true;
@@ -665,20 +620,20 @@ test "Bug Reports" {
             }).call,
         ), .medium);
 
-        _ = try r.route(allocator, "GET", "/route/21");
+        _ = try r.route(allocator, std.testing.io, "GET", "/route/21");
         try std.testing.expectEqualStrings("ROUID", result.items);
 
         result.clearAndFree(allocator);
-        _ = try r.route(allocator, "GET", "/route");
+        _ = try r.route(allocator, std.testing.io, "GET", "/route");
         try std.testing.expectEqualStrings("ROUTE", result.items);
 
         result.clearAndFree(allocator);
-        _ = r.remove(allocator, "GET", "/route", .medium);
-        _ = try r.route(allocator, "GET", "/route");
+        _ = try r.remove(allocator, "GET", "/route", .medium);
+        _ = try r.route(allocator, std.testing.io, "GET", "/route");
         try std.testing.expectEqualStrings("", result.items);
 
-        _ = r.remove(allocator, "GET", "/route/:id", .medium);
-        _ = try r.route(allocator, "GET", "/route/21");
+        _ = try r.remove(allocator, "GET", "/route/:id", .medium);
+        _ = try r.route(allocator, std.testing.io, "GET", "/route/21");
         try std.testing.expectEqualStrings("", result.items);
     }
     {
@@ -690,7 +645,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/foo//////bar/baz/qux", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "MANYSLASH");
                     return false;
@@ -704,7 +659,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/foo", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "FOO");
                     return false;
@@ -715,10 +670,10 @@ test "Bug Reports" {
             }).call,
         ), .medium);
 
-        _ = try r.route(allocator, "GET", "/foo");
-        _ = try r.route(allocator, "GET", "/foo/");
-        _ = try r.route(allocator, "GET", "/foo//bar/baz/qux");
-        _ = try r.route(allocator, "GET", "/foo//////bar/baz/qux");
+        _ = try r.route(allocator, std.testing.io, "GET", "/foo");
+        _ = try r.route(allocator, std.testing.io, "GET", "/foo/");
+        _ = try r.route(allocator, std.testing.io, "GET", "/foo//bar/baz/qux");
+        _ = try r.route(allocator, std.testing.io, "GET", "/foo//////bar/baz/qux");
         try std.testing.expectEqualStrings("FOOMANYSLASH", result.items);
     }
     {
@@ -730,7 +685,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/test/*", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "TEST");
                     return false;
@@ -740,7 +695,7 @@ test "Bug Reports" {
                 pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
             }).call,
         ), .medium);
-        _ = try r.route(allocator, "GET", "/test/");
+        _ = try r.route(allocator, std.testing.io, "GET", "/test/");
         try std.testing.expectEqualStrings("TEST", result.items);
     }
 
@@ -753,7 +708,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/*", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "WW");
                     return false;
@@ -767,7 +722,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/ok", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "GS");
                     return false;
@@ -781,7 +736,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/*", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "GW");
                     return false;
@@ -792,7 +747,7 @@ test "Bug Reports" {
             }).call,
         ), .medium);
 
-        _ = try r.route(allocator, "GET", "/ok");
+        _ = try r.route(allocator, std.testing.io, "GET", "/ok");
         try std.testing.expectEqualStrings("WWGSGW", result.items);
     }
 
@@ -805,7 +760,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "WS");
                     return false;
@@ -819,7 +774,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "GS");
                     return false;
@@ -830,7 +785,7 @@ test "Bug Reports" {
             }).call,
         ), .medium);
 
-        _ = try r.route(allocator, "GET", "/");
+        _ = try r.route(allocator, std.testing.io, "GET", "/");
         try std.testing.expectEqualStrings("WSGS", result.items);
     }
 
@@ -843,7 +798,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/*", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "WW");
                     return false;
@@ -857,7 +812,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/static", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "GSL");
                     return false;
@@ -871,7 +826,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"*"}, "/*", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "AW");
                     return false;
@@ -882,7 +837,7 @@ test "Bug Reports" {
             }).call,
         ), .low);
 
-        _ = try r.route(allocator, "GET", "/static");
+        _ = try r.route(allocator, std.testing.io, "GET", "/static");
         try std.testing.expectEqualStrings("WWGSLAW", result.items);
     }
 
@@ -895,7 +850,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/*", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "WW");
                     return false;
@@ -909,7 +864,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "GSS");
                     return false;
@@ -923,7 +878,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/static", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "GSL");
                     return false;
@@ -937,7 +892,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"*"}, "/*", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "AW");
                     return false;
@@ -948,7 +903,7 @@ test "Bug Reports" {
             }).call,
         ), .low);
 
-        _ = try r.route(allocator, "GET", "/static");
+        _ = try r.route(allocator, std.testing.io, "GET", "/static");
         try std.testing.expectEqualStrings("WWGSLAW", result.items);
     }
 
@@ -961,7 +916,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/foo", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "FOO");
                     return false;
@@ -975,7 +930,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/:id", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "ID");
                     return false;
@@ -989,7 +944,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/1ab", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "ONEAB");
                     return false;
@@ -1000,7 +955,7 @@ test "Bug Reports" {
             }).call,
         ), .medium);
 
-        _ = try r.route(allocator, "GET", "/1ab");
+        _ = try r.route(allocator, std.testing.io, "GET", "/1ab");
         try std.testing.expectEqualStrings("ONEABID", result.items);
     }
 
@@ -1013,7 +968,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/*", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "STAR");
                     return false;
@@ -1027,7 +982,7 @@ test "Bug Reports" {
         try r.add(allocator, &.{"GET"}, "/", .init(
             &result,
             (struct {
-                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+                pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                     var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
                     try out.appendSlice(a, "STATIC");
                     return false;
@@ -1038,7 +993,7 @@ test "Bug Reports" {
             }).call,
         ), .medium);
 
-        _ = try r.route(allocator, "GET", "/");
+        _ = try r.route(allocator, std.testing.io, "GET", "/");
         try std.testing.expectEqualStrings("STATICSTAR", result.items);
     }
 }
@@ -1053,7 +1008,7 @@ test "Parameters" {
     try r.add(allocator, &.{"GET"}, "/candy/:kind/*", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, h: *HttpRouter(i32)) !bool {
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, h: *HttpRouter(i32)) !bool {
                 const params_top, const params = h.getParameters();
                 try std.testing.expect(params_top == 0);
                 try std.testing.expectEqualStrings("lollipop", params[0]);
@@ -1062,15 +1017,13 @@ test "Parameters" {
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
     try r.add(allocator, &.{"GET"}, "/candy/lollipop/*", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, h: *HttpRouter(i32)) !bool {
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, h: *HttpRouter(i32)) !bool {
                 const params_top, _ = h.getParameters();
                 try std.testing.expect(params_top == -1);
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
@@ -1078,15 +1031,13 @@ test "Parameters" {
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
     try r.add(allocator, &.{"GET"}, "/candy/:kind/:action", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, h: *HttpRouter(i32)) !bool {
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, h: *HttpRouter(i32)) !bool {
                 const params_top, const params = h.getParameters();
                 try std.testing.expect(params_top == 1);
                 try std.testing.expectEqualStrings("lollipop", params[0]);
@@ -1096,15 +1047,13 @@ test "Parameters" {
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
     try r.add(allocator, &.{"GET"}, "/candy/lollipop/:action", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, h: *HttpRouter(i32)) !bool {
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, h: *HttpRouter(i32)) !bool {
                 const params_top, const params = h.getParameters();
                 try std.testing.expect(params_top == 0);
                 try std.testing.expectEqualStrings("eat", params[0]);
@@ -1113,15 +1062,13 @@ test "Parameters" {
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
     try r.add(allocator, &.{"GET"}, "/candy/lollipop/eat", .init(
         &result,
         (struct {
-            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, h: *HttpRouter(i32)) !bool {
+            pub fn call(ctx: ?*anyopaque, a: std.mem.Allocator, _: std.Io, h: *HttpRouter(i32)) !bool {
                 const params_top, _ = h.getParameters();
                 try std.testing.expect(params_top == -1);
                 var out: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx));
@@ -1129,18 +1076,16 @@ test "Parameters" {
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
-    _ = try r.route(allocator, "GET", "/candy/lollipop/eat");
+    _ = try r.route(allocator, std.testing.io, "GET", "/candy/lollipop/eat");
     try std.testing.expectEqualStrings("GLSGLPGLWGPPGPW", result.items);
     result.clearAndFree(allocator);
 
-    _ = try r.route(allocator, "GET", "/candy/lollipop/");
-    _ = try r.route(allocator, "GET", "/candy/lollipop");
-    _ = try r.route(allocator, "GET", "/candy/");
+    _ = try r.route(allocator, std.testing.io, "GET", "/candy/lollipop/");
+    _ = try r.route(allocator, std.testing.io, "GET", "/candy/lollipop");
+    _ = try r.route(allocator, std.testing.io, "GET", "/candy/");
     try std.testing.expectEqualStrings("GLWGPW", result.items);
 }
 
@@ -1153,31 +1098,27 @@ test "Performance" {
     try r.add(allocator, &.{"GET"}, "/*", .init(
         null,
         (struct {
-            pub fn call(_: ?*anyopaque, _: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+            pub fn call(_: ?*anyopaque, _: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 return true;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
     try r.add(allocator, &.{"*"}, "/*", .init(
         null,
         (struct {
-            pub fn call(_: ?*anyopaque, _: std.mem.Allocator, _: *HttpRouter(i32)) !bool {
+            pub fn call(_: ?*anyopaque, _: std.mem.Allocator, _: std.Io, _: *HttpRouter(i32)) !bool {
                 return true;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ), .medium);
 
     const start = std.Io.Timestamp.now(io, .real);
     for (0..1000000) |_| {
-        _ = try r.route(allocator, "GET", "/something");
-        _ = try r.route(allocator, "other", "/whatever");
+        _ = try r.route(allocator, std.testing.io, "GET", "/something");
+        _ = try r.route(allocator, std.testing.io, "other", "/whatever");
     }
     const end = std.Io.Timestamp.now(io, .real);
 

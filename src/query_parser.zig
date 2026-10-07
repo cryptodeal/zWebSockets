@@ -1,5 +1,7 @@
 const std = @import("std");
 
+pub const valueless_query = "";
+
 pub inline fn getDecodedQueryValue(key: []const u8, raw_query: []const u8) ?[]const u8 {
     if (key.len == 0) return null;
     var query_string = raw_query;
@@ -51,7 +53,9 @@ pub inline fn getDecodedQueryValue(key: []const u8, raw_query: []const u8) ?[]co
                     return statement_value[0..out];
                 }
             } else {
-                return null;
+                if (std.mem.eql(u8, key, statement)) {
+                    return valueless_query;
+                }
             }
         }
         query_string = query_string[statement.len + 1 ..];
@@ -100,4 +104,27 @@ test "Query Parser" {
     res = getDecodedQueryValue("test2", buf);
     try std.testing.expect(res != null);
     try std.testing.expectEqualStrings("some Value", res.?);
+
+    buf = try std.fmt.bufPrint(&buffer, "?debug&dx=5", .{});
+    res = getDecodedQueryValue("dx", buf);
+    try std.testing.expect(res != null);
+    try std.testing.expectEqualStrings("5", res.?);
+
+    buf = try std.fmt.bufPrint(&buffer, "?debug&empty=&x=1", .{});
+    res = getDecodedQueryValue("debug", buf);
+    try std.testing.expect(res != null);
+    try std.testing.expectEqualStrings("", res.?);
+    try std.testing.expect(res.?.ptr == valueless_query);
+    res = getDecodedQueryValue("empty", buf);
+    try std.testing.expect(res != null);
+    try std.testing.expectEqualStrings("", res.?);
+    try std.testing.expect(res.?.ptr != valueless_query);
+    res = getDecodedQueryValue("missing", buf);
+    try std.testing.expect(res == null);
+    try std.testing.expect(getDecodedQueryValue("debu", buf) == null);
+    try std.testing.expect(getDecodedQueryValue("debugger", buf) == null);
+    try std.testing.expectEqualStrings("1", getDecodedQueryValue("x", buf).?);
+
+    buf = try std.fmt.bufPrint(&buffer, "?a=1&flag", .{});
+    try std.testing.expect(getDecodedQueryValue("flag", buf).?.ptr == valueless_query);
 }

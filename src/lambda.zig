@@ -18,9 +18,9 @@ pub fn Lambda(comptime Context: type, comptime ParamTypes: []const type, comptim
             break :blk &param_attrs;
         }, ReturnType, .{}),
 
-        deinit_: *const fn (std.mem.Allocator, Context) void,
+        deinit_: ?*const fn (std.mem.Allocator, Context) void = null,
 
-        pub fn init(ctx: Context, func: @FieldType(Self, "func"), deinit_: *const fn (std.mem.Allocator, Context) void) Self {
+        pub fn init(ctx: Context, func: @FieldType(Self, "func"), deinit_: ?*const fn (std.mem.Allocator, Context) void) Self {
             return .{
                 .context = ctx,
                 .func = func,
@@ -29,10 +29,10 @@ pub fn Lambda(comptime Context: type, comptime ParamTypes: []const type, comptim
         }
 
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            self.deinit_(allocator, self.context);
+            if (self.deinit_) |deinit_| deinit_(allocator, self.context);
         }
 
-        pub fn call(self: *Self, args: anytype) ReturnType {
+        pub fn call(self: *const Self, args: anytype) ReturnType {
             return @call(.auto, self.func, .{self.context} ++ args);
         }
     };

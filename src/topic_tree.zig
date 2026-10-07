@@ -57,8 +57,9 @@ pub fn TopicTree(comptime T: type, comptime B: type) type {
         const Self = @This();
         pub const IteratorFlags = enum(u32) { last = 1, first = 2, _ };
 
+        arena: std.heap.ArenaAllocator,
         iterating_subscriber: ?*Subscriber = null,
-        cb: Lambda(?*anyopaque, &.{ std.mem.Allocator, *Subscriber, *T, IteratorFlags }, anyerror!bool),
+        cb: Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io, *Subscriber, *T, IteratorFlags }, anyerror!bool),
         //  cb: *const fn (std.mem.Allocator, ctx: Context, *Subscriber, *T, IteratorFlags) anyerror!bool,
         topics: std.StringHashMapUnmanaged(*Topic) = .empty,
         drainable_subscribers: ?*Subscriber = null,
@@ -70,13 +71,13 @@ pub fn TopicTree(comptime T: type, comptime B: type) type {
             }
         }
 
-        fn drainImpl(self: *Self, allocator: std.mem.Allocator, s: *Subscriber) !void {
+        fn drainImpl(self: *Self, allocator: std.mem.Allocator, io: std.Io, s: *Subscriber) !void {
             const num_message_indices: usize = s.num_message_indices;
             s.num_message_indices = 0;
             for (0..num_message_indices) |i| {
                 const outgoing_message = &self.outgoing_messages.items[s.message_indices[i]];
                 const flags: u32 = if (i == num_message_indices - 1) @intFromEnum(IteratorFlags.last) else 0;
-                if (try self.cb.call(.{ allocator, s, outgoing_message, @as(IteratorFlags, @enumFromInt(flags | (if (i == 0) @intFromEnum(IteratorFlags.first) else 0))) })) {
+                if (try self.cb.call(.{ allocator, io, s, outgoing_message, @as(IteratorFlags, @enumFromInt(flags | (if (i == 0) @intFromEnum(IteratorFlags.first) else 0))) })) {
                     break;
                 }
             }
@@ -94,18 +95,25 @@ pub fn TopicTree(comptime T: type, comptime B: type) type {
             }
         }
 
-        pub fn init(allocator: std.mem.Allocator, cb: Lambda(?*anyopaque, &.{ std.mem.Allocator, *Subscriber, *T, IteratorFlags }, anyerror!bool)) !*Self {
+        pub fn init(allocator: std.mem.Allocator, cb: Lambda(?*anyopaque, &.{ std.mem.Allocator, std.Io, *Subscriber, *T, IteratorFlags }, anyerror!bool)) !*Self {
             const self = try allocator.create(Self);
             self.* = .{
+                .arena = std.heap.ArenaAllocator.init(allocator),
                 .cb = cb,
             };
             return self;
         }
 
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.arena.deinit();
             self.topics.deinit(allocator);
+            self.cb.deinit(allocator);
             self.outgoing_messages.deinit(allocator);
             allocator.destroy(self);
+        }
+
+        pub fn dupe(self: *Self, msg: []const u8) ![]u8 {
+            return self.arena.allocator().dupe(u8, msg);
         }
 
         pub fn lookupTopic(self: *Self, topic: []const u8) ?*Topic {
@@ -132,7 +140,7 @@ pub fn TopicTree(comptime T: type, comptime B: type) type {
                     return .{ false, false, -1 };
                 }
                 _ = topic_ptr.subscribers.remove(s);
-                const new_count = topic_ptr.subscribers.count();
+                const new_count: i32 = @intCast(topic_ptr.subscribers.count());
                 if (new_count == 0) {
                     _ = self.topics.remove(topic);
                 }
@@ -167,44 +175,61 @@ pub fn TopicTree(comptime T: type, comptime B: type) type {
             } else return;
         }
 
-        pub fn drainSubscriber(self: *Self, allocator: std.mem.Allocator, s: *Subscriber) !void {
+        pub fn drainSubscriber(self: *Self, allocator: std.mem.Allocator, io: std.Io, s: *Subscriber) !void {
             if (s.needsDrainage()) {
                 self.unlinkDrainableSubscriber(s);
-                try self.drainImpl(allocator, s);
+                try self.drainImpl(allocator, io, s);
                 if (self.drainable_subscribers == null) {
+                    // TODO: might want to `.free_all` if memory usage is important
+                    _ = self.arena.reset(.retain_capacity);
                     self.outgoing_messages.clearRetainingCapacity();
                 }
             }
         }
 
-        pub fn drain(self: *Self, allocator: std.mem.Allocator) !void {
+        pub fn drain(self: *Self, allocator: std.mem.Allocator, io: std.Io) !void {
             if (self.drainable_subscribers) |drainable_subscribers| {
                 var s: ?*Subscriber = drainable_subscribers;
                 while (s) |s_| : (s = s_.next) {
-                    try self.drainImpl(allocator, s_);
+                    try self.drainImpl(allocator, io, s_);
                 }
                 self.drainable_subscribers = null;
+                // TODO: might want to `.free_all` if memory usage is important
+                _ = self.arena.reset(.retain_capacity);
                 self.outgoing_messages.clearRetainingCapacity();
             }
         }
 
-        pub fn publishBig(self: *Self, allocator: std.mem.Allocator, sender: *Subscriber, topic: []const u8, big_message: B, cb: *const fn (std.mem.Allocator, *Subscriber, B) anyerror!void) !bool {
+        pub fn publishAnyBig(self: *Self, allocator: std.mem.Allocator, io: std.Io, sender: ?*Subscriber, topic: []const u8, big_message: anytype, cb: *const fn (std.mem.Allocator, std.Io, *Subscriber, @TypeOf(big_message)) anyerror!void) !bool {
             if (self.topics.get(topic)) |it| {
                 var iterator = it.subscribers.keyIterator();
                 while (iterator.next()) |entry| {
                     const s = entry.*;
-                    if (sender != s) {
-                        try cb(allocator, s, big_message);
+                    if (sender != @as(?*Subscriber, @ptrCast(@alignCast(s)))) {
+                        try cb(allocator, io, s, big_message);
                     }
                 }
                 return true;
             } else return false;
         }
 
-        pub fn publish(self: *Self, allocator: std.mem.Allocator, sender: ?*Subscriber, topic: []const u8, message: T) !bool {
+        pub fn publishBig(self: *Self, allocator: std.mem.Allocator, io: std.Io, sender: ?*Subscriber, topic: []const u8, big_message: B, cb: *const fn (std.mem.Allocator, std.Io, *Subscriber, B) anyerror!void) !bool {
+            if (self.topics.get(topic)) |it| {
+                var iterator = it.subscribers.keyIterator();
+                while (iterator.next()) |entry| {
+                    const s = entry.*;
+                    if (sender != @as(?*Subscriber, @ptrCast(@alignCast(s)))) {
+                        try cb(allocator, io, s, big_message);
+                    }
+                }
+                return true;
+            } else return false;
+        }
+
+        pub fn publish(self: *Self, allocator: std.mem.Allocator, io: std.Io, sender: ?*Subscriber, topic: []const u8, message: T) !bool {
             if (self.topics.get(topic)) |it| {
                 if (self.outgoing_messages.items.len == std.math.maxInt(u16)) {
-                    try self.drain(allocator);
+                    try self.drain(allocator, io);
                 }
                 var referenced_message = false;
                 var s_iterator = it.subscribers.keyIterator();
@@ -213,7 +238,7 @@ pub fn TopicTree(comptime T: type, comptime B: type) type {
                     if (sender != @as(?*Subscriber, @ptrCast(@alignCast(s)))) {
                         referenced_message = true;
                         if (s.num_message_indices == 32) {
-                            try self.drainSubscriber(allocator, s);
+                            try self.drainSubscriber(allocator, io, s);
                         }
                         s.message_indices[s.num_message_indices] = @intCast(self.outgoing_messages.items.len);
                         s.num_message_indices += 1;
@@ -249,7 +274,7 @@ test "Correctness" {
     topic_tree = try .init(allocator, .init(
         &actual_result,
         (struct {
-            pub fn call(c: ?*anyopaque, a: std.mem.Allocator, s: *Subscriber, message: *[]u8, _: TopicTree([]u8, []const u8).IteratorFlags) !bool {
+            pub fn call(c: ?*anyopaque, a: std.mem.Allocator, _: std.Io, s: *Subscriber, message: *[]u8, _: TopicTree([]u8, []const u8).IteratorFlags) !bool {
                 const ctx: *std.AutoHashMapUnmanaged(?*anyopaque, std.ArrayList(u8)) = @ptrCast(@alignCast(c));
                 const entry = try ctx.getOrPut(a, s);
                 if (!entry.found_existing) entry.value_ptr.* = .empty;
@@ -257,9 +282,7 @@ test "Correctness" {
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ));
     defer topic_tree.deinit(allocator);
 
@@ -273,27 +296,27 @@ test "Correctness" {
         s2 = tmp;
     }
 
-    _ = try topic_tree.publish(allocator, null, "topic3", @constCast(@as([]const u8, "Nobody should see")));
+    _ = try topic_tree.publish(allocator, std.testing.io, null, "topic3", @constCast(@as([]const u8, "Nobody should see")));
 
     _ = try topic_tree.subscribe(allocator, s1, "topic3");
 
-    _ = try topic_tree.publish(allocator, s1, "topic3", @constCast(@as([]const u8, "Nobody should see")));
+    _ = try topic_tree.publish(allocator, std.testing.io, s1, "topic3", @constCast(@as([]const u8, "Nobody should see")));
 
     _ = try topic_tree.subscribe(allocator, s2, "topic3");
 
-    _ = try topic_tree.publish(allocator, null, "topic3", @constCast(@as([]const u8, "Both should see")));
+    _ = try topic_tree.publish(allocator, std.testing.io, null, "topic3", @constCast(@as([]const u8, "Both should see")));
 
-    _ = try topic_tree.publish(allocator, s2, "topic3", @constCast(@as([]const u8, "s1 should see, not s2")));
+    _ = try topic_tree.publish(allocator, std.testing.io, s2, "topic3", @constCast(@as([]const u8, "s1 should see, not s2")));
 
-    _ = try topic_tree.publish(allocator, s1, "topic3", @constCast(@as([]const u8, "s2 should see, not s1")));
+    _ = try topic_tree.publish(allocator, std.testing.io, s1, "topic3", @constCast(@as([]const u8, "s2 should see, not s1")));
 
-    _ = try topic_tree.publish(allocator, null, "topic3", @constCast(@as([]const u8, "Again, both should see this as well")));
+    _ = try topic_tree.publish(allocator, std.testing.io, null, "topic3", @constCast(@as([]const u8, "Again, both should see this as well")));
 
     const expected_result = [_]@Tuple(&.{ *Subscriber, []const u8 }){
         .{ s1, "Both should sees1 should see, not s2Again, both should see this as well" },
         .{ s2, "Both should sees2 should see, not s1Again, both should see this as well" },
     };
-    try topic_tree.drain(allocator);
+    try topic_tree.drain(allocator, std.testing.io);
     for (expected_result) |p| {
         const actual = actual_result.get(p[0]);
         try std.testing.expect(actual != null);
@@ -314,7 +337,7 @@ test "Bug Report" {
     topic_tree = try .init(allocator, .init(
         &actual_result,
         (struct {
-            pub fn call(c: ?*anyopaque, a: std.mem.Allocator, s: *Subscriber, message: *[]u8, _: TopicTree([]u8, []const u8).IteratorFlags) !bool {
+            pub fn call(c: ?*anyopaque, a: std.mem.Allocator, _: std.Io, s: *Subscriber, message: *[]u8, _: TopicTree([]u8, []const u8).IteratorFlags) !bool {
                 const ctx: *std.AutoHashMapUnmanaged(?*anyopaque, std.ArrayList(u8)) = @ptrCast(@alignCast(c));
                 const entry = try ctx.getOrPut(a, s);
                 if (!entry.found_existing) entry.value_ptr.* = .empty;
@@ -322,9 +345,7 @@ test "Bug Report" {
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ));
     defer topic_tree.deinit(allocator);
 
@@ -340,16 +361,16 @@ test "Bug Report" {
 
     _ = try topic_tree.subscribe(allocator, s1, "b1");
     _ = try topic_tree.subscribe(allocator, s2, "b2");
-    _ = try topic_tree.publish(allocator, s1, "b1", @constCast(@as([]const u8, "b1")));
-    _ = try topic_tree.publish(allocator, s1, "b2", @constCast(@as([]const u8, "b2")));
-    _ = try topic_tree.publish(allocator, s2, "b1", @constCast(@as([]const u8, "b1")));
-    _ = try topic_tree.publish(allocator, s2, "b2", @constCast(@as([]const u8, "b2")));
+    _ = try topic_tree.publish(allocator, std.testing.io, s1, "b1", @constCast(@as([]const u8, "b1")));
+    _ = try topic_tree.publish(allocator, std.testing.io, s1, "b2", @constCast(@as([]const u8, "b2")));
+    _ = try topic_tree.publish(allocator, std.testing.io, s2, "b1", @constCast(@as([]const u8, "b1")));
+    _ = try topic_tree.publish(allocator, std.testing.io, s2, "b2", @constCast(@as([]const u8, "b2")));
 
     const expected_result = [_]@Tuple(&.{ *Subscriber, []const u8 }){
         .{ s1, "b1" },
         .{ s2, "b2" },
     };
-    try topic_tree.drain(allocator);
+    try topic_tree.drain(allocator, std.testing.io);
     for (expected_result) |p| {
         const actual = actual_result.get(p[0]);
         try std.testing.expect(actual != null);
@@ -370,7 +391,7 @@ test "Reordering v19" {
     topic_tree = try .init(allocator, .init(
         &actual_result,
         (struct {
-            pub fn call(c: ?*anyopaque, a: std.mem.Allocator, s: *Subscriber, message: *[]u8, _: TopicTree([]u8, []const u8).IteratorFlags) !bool {
+            pub fn call(c: ?*anyopaque, a: std.mem.Allocator, _: std.Io, s: *Subscriber, message: *[]u8, _: TopicTree([]u8, []const u8).IteratorFlags) !bool {
                 const ctx: *std.AutoHashMapUnmanaged(?*anyopaque, std.ArrayList(u8)) = @ptrCast(@alignCast(c));
                 const entry = try ctx.getOrPut(a, s);
                 if (!entry.found_existing) entry.value_ptr.* = .empty;
@@ -378,9 +399,7 @@ test "Reordering v19" {
                 return false;
             }
         }).call,
-        (struct {
-            pub fn call(_: std.mem.Allocator, _: ?*anyopaque) void {}
-        }).call,
+        null,
     ));
     defer topic_tree.deinit(allocator);
 
@@ -398,11 +417,11 @@ test "Reordering v19" {
     }
 
     for (0..100) |i| {
-        _ = try topic_tree.publish(allocator, null, names[i][0 .. names[i].len - 1], names[i]);
+        _ = try topic_tree.publish(allocator, std.testing.io, null, names[i][0 .. names[i].len - 1], names[i]);
         try expected_result.appendSlice(allocator, names[i]);
     }
 
-    try topic_tree.drain(allocator);
+    try topic_tree.drain(allocator, std.testing.io);
 
     const actual = actual_result.get(s1);
     try std.testing.expect(actual != null);

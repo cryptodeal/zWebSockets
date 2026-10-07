@@ -14,14 +14,45 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: mlugg/setup-zig@v2
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
 
       - name: Build
         run: zig build
 
-      - name: Test
+      - name: Unit Tests
         run: zig build test
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+      
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build Crc32/Echo Body Examples
+        run: zig build examples
+
+      - name: Smoke
+        run: |
+          zig-out/bin/crc32 &
+          sleep 1
+          deno run --allow-net tests/smoke.mjs
+          node tests/smoke.mjs
+          bun tests/smoke.mjs
+          pkill crc32
+      
+      - name: Compliance
+        run: |
+          zig-out/bin/echo_body &
+          sleep 1
+          deno run --allow-net tests/fragment_test.ts --host localhost --port 3000
+          deno run --allow-net h1spec/http_test.ts localhost 3000
+          pkill echo_body
