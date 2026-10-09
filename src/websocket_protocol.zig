@@ -143,9 +143,9 @@ pub const Protocol = struct {
     }
 
     pub const Snd = enum(u8) {
-        continuation,
-        no_fin,
-        compressed,
+        continuation = 1,
+        no_fin = 2,
+        compressed = 64,
     };
 
     pub inline fn formatMessage(comptime is_server: bool, dst: [*]u8, src: []const u8, op_code: OpCode, reported_length: usize, compressed: bool, fin: bool) usize {
@@ -295,6 +295,7 @@ pub fn WebSocketProtocol(comptime is_server: bool, comptime Impl: type) type {
         }
 
         fn consumeMessage(allocator: std.mem.Allocator, io: std.Io, comptime message_header: u32, comptime T: type, pay_length: T, src: *[*]u8, length: *usize, w_state: *WebSocketState(is_server), user: ?*anyopaque) !bool {
+            // std.debug.print("consumeMessage({s}):\n\tpay_length: {d}\n\tlength: {d}\n\tmessage_header: {d}\n\n", .{ @typeName(T), pay_length, length.*, message_header });
             if (getOpCode(src.*) != 0) {
                 if (w_state.state.op_stack == 1 or (!w_state.state.last_fin and getOpCode(src.*) < 2)) {
                     try Impl.forceClose(allocator, io, w_state, user, err_protocol);
@@ -337,10 +338,10 @@ pub fn WebSocketProtocol(comptime is_server: bool, comptime Impl: type) type {
             } else {
                 w_state.state.spill_length = 0;
                 w_state.state.wants_head = false;
-                w_state.remaining_bytes = @intCast(pay_length - length.* + message_header);
+                w_state.remaining_bytes = @intCast(pay_length -% length.* +% message_header);
                 const fin = isFin(src.*);
                 if (comptime is_server) {
-                    @memcpy(&w_state.mask, src.* + message_header);
+                    @memcpy(&w_state.mask, src.* + message_header - 4);
                     var mask: u64 = undefined;
                     @memcpy(std.mem.asBytes(&mask)[0..4], src.* + message_header - 4);
                     @memcpy(std.mem.asBytes(&mask)[4..], src.* + message_header - 4);
@@ -408,6 +409,7 @@ pub fn WebSocketProtocol(comptime is_server: bool, comptime Impl: type) type {
         pub fn consume(allocator: std.mem.Allocator, io: std.Io, src: []u8, w_state: *WebSocketState(is_server), user: ?*anyopaque) !void {
             var src_ = src.ptr;
             var length = src.len;
+            // std.debug.print("consume: length = {d}\n", .{length});
             if (w_state.state.spill_length != 0) {
                 src_ -= w_state.state.spill_length;
                 length += w_state.state.spill_length;
@@ -422,23 +424,28 @@ pub fn WebSocketProtocol(comptime is_server: bool, comptime Impl: type) type {
                         return;
                     }
                     if (payloadLength(src_) < 126) {
+                        // std.debug.print("payloadLength(src_) < 126\n", .{});
                         if (try consumeMessage(allocator, io, short_message_header, u8, payloadLength(src_), &src_, &length, w_state, user)) {
                             return;
                         }
                     } else if (payloadLength(src_) == 126) {
+                        // std.debug.print("payloadLength(src_) == 126\n", .{});
                         if (length < medium_message_header) {
+                            // std.debug.print("length < medium_message_header\n", .{});
                             break;
                         } else if (try consumeMessage(allocator, io, medium_message_header, u16, std.mem.nativeToBig(u16, Protocol.bitCast(u16, (src_ + 2)[0..@sizeOf(u16)])), &src_, &length, w_state, user)) {
                             return;
                         }
                     } else if (length < long_message_header) {
+                        // std.debug.print("length < long_message_header\n", .{});
                         break;
                     } else if (try consumeMessage(allocator, io, long_message_header, u64, std.mem.nativeToBig(u64, Protocol.bitCast(u64, (src_ + 2)[0..@sizeOf(u64)])), &src_, &length, w_state, user)) {
                         return;
                     }
                 }
+                // std.debug.print("exit loop\n", .{});
                 if (length != 0) {
-                    @memcpy(&w_state.state.spill, src_[0..length]);
+                    @memcpy(w_state.state.spill[0..length], src_[0..length]);
                     w_state.state.spill_length = @intCast(length & 0xf);
                 }
             }
