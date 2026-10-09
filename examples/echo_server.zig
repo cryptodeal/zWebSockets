@@ -5,11 +5,11 @@ const zs = @import("zSockets");
 const PerSocketData = struct {};
 
 pub fn main(init: std.process.Init) !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer std.debug.assert(gpa.deinit() == .ok);
-    const allocator = gpa.allocator();
+    // var gpa = std.heap.DebugAllocator(.{}){};
+    // defer std.debug.assert(gpa.deinit() == .ok);
+    // const allocator = gpa.allocator();
 
-    // const allocator = std.heap.smp_allocator;
+    const allocator = std.heap.smp_allocator;
 
     var app = try zws.SslApp.init(allocator, init.io, .{
         .key_file_name = "misc/key.pem",

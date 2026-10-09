@@ -143,9 +143,9 @@ pub const Protocol = struct {
     }
 
     pub const Snd = enum(u8) {
-        continuation,
-        no_fin,
-        compressed,
+        continuation = 1,
+        no_fin = 2,
+        compressed = 64,
     };
 
     pub inline fn formatMessage(comptime is_server: bool, dst: [*]u8, src: []const u8, op_code: OpCode, reported_length: usize, compressed: bool, fin: bool) usize {
@@ -337,10 +337,10 @@ pub fn WebSocketProtocol(comptime is_server: bool, comptime Impl: type) type {
             } else {
                 w_state.state.spill_length = 0;
                 w_state.state.wants_head = false;
-                w_state.remaining_bytes = @intCast(pay_length - length.* + message_header);
+                w_state.remaining_bytes = @intCast(pay_length -% length.* +% message_header);
                 const fin = isFin(src.*);
                 if (comptime is_server) {
-                    @memcpy(&w_state.mask, src.* + message_header);
+                    @memcpy(&w_state.mask, src.* + message_header - 4);
                     var mask: u64 = undefined;
                     @memcpy(std.mem.asBytes(&mask)[0..4], src.* + message_header - 4);
                     @memcpy(std.mem.asBytes(&mask)[4..], src.* + message_header - 4);
@@ -438,7 +438,7 @@ pub fn WebSocketProtocol(comptime is_server: bool, comptime Impl: type) type {
                     }
                 }
                 if (length != 0) {
-                    @memcpy(&w_state.state.spill, src_[0..length]);
+                    @memcpy(w_state.state.spill[0..length], src_[0..length]);
                     w_state.state.spill_length = @intCast(length & 0xf);
                 }
             }

@@ -4,3 +4,4 @@ zig-out/
 misc/*.pem
 misc/*.srl
 .DS_Store
+autobahn/reports

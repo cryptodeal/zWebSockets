@@ -69,7 +69,7 @@ pub fn WebSocketContext(comptime ssl: bool, comptime is_server: bool, comptime U
                         return true;
                     }
                     if (websocket_context_data.message_handler) |*message_handler| {
-                        try message_handler.call(.{ allocator, io, @as(*WebSocket(ssl, is_server, UserData), @ptrCast(@alignCast(s))), data, @as(OpCode, @enumFromInt(op_code)) });
+                        try message_handler.call(.{ allocator, io, @as(*WebSocket(ssl, is_server, UserData), @ptrCast(@alignCast(s))), data_, @as(OpCode, @enumFromInt(op_code)) });
                         if (@as(*zs.Socket, @ptrCast(@alignCast(s))).isClosed(ssl) or websocket_data.is_shutting_down) {
                             return true;
                         }
@@ -82,7 +82,7 @@ pub fn WebSocketContext(comptime ssl: bool, comptime is_server: bool, comptime U
                         try forceClose(allocator, io, websocket_state, s, websocket_protocol.err_too_big_message);
                         return true;
                     }
-                    websocket_data.fragment_buffer.appendSliceAssumeCapacity(data_);
+                    try websocket_data.fragment_buffer.appendSlice(allocator, data_);
                     if (remaining_bytes == 0 and fin) {
                         if (websocket_data.compression_status == .compressed_frame) {
                             websocket_data.compression_status = .enabled;

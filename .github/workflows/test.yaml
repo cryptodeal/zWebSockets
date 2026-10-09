@@ -38,7 +38,7 @@ jobs:
         uses: oven-sh/setup-bun@v2
 
       - name: Build Crc32/Echo Body Examples
-        run: zig build examples
+        run: zig build examples -Doptimize=ReleaseFast
 
       - name: Smoke
         run: |

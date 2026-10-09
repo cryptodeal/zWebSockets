@@ -8,7 +8,7 @@ const AUTOBAHN_TESTSUITE_DOCKER =
   "crossbario/autobahn-testsuite:0.8.2@sha256:519915fb568b04c9383f70a1c405ae3ff44ab9e35835b085239c258b6fac3074";
 
 const server = $`zig-out/bin/echo_server`.spawn();
-await $`docker run --platform linux/amd64 --name fuzzingserver	-v ${pwd}/fuzzingclient.json:/fuzzingclient.json:ro	-v ${pwd}/reports:/reports -p 9001:9001	--net=host --rm	${AUTOBAHN_TESTSUITE_DOCKER} wstest -m fuzzingclient -s fuzzingclient.json`.cwd(pwd);
+await $`docker run --name fuzzingserver	-v ${pwd}/fuzzingclient.json:/fuzzingclient.json:ro	-v ${pwd}/reports:/reports -p 9001:9001	--net=host --rm	${AUTOBAHN_TESTSUITE_DOCKER} wstest -m fuzzingclient -s fuzzingclient.json`.cwd(pwd);
 
 const result = Object.values(JSON.parse(Deno.readTextFileSync("./autobahn/reports/servers/index.json"))["zWebSockets"]);
 
