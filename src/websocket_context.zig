@@ -46,7 +46,6 @@ pub fn WebSocketContext(comptime ssl: bool, comptime is_server: bool, comptime U
             var data_ = data;
             const websocket_context_data: *WebSocketContextData(ssl, UserData) = @as(*zs.Socket, @ptrCast(@alignCast(s))).context.ext[0].get(WebSocketContextData(ssl, UserData)).?;
             const websocket_data: *WebSocketData = @as(*zs.Socket, @ptrCast(@alignCast(s))).ext[0].get(WebSocketData).?;
-            // std.debug.print("handleFragment:\n\top_code: {d}\n\tlength: {d}\n\tremaining_bytes: {d}\n\tfin: {}\n\twebsocket_data.compression_status: {s}\n\twebsocket_data.fragment_buffer.items.len: {d}\n", .{ op_code, data.len, remaining_bytes, fin, @tagName(websocket_data.compression_status), websocket_data.fragment_buffer.items.len });
             if (op_code < 3) {
                 if (remaining_bytes == 0 and fin and websocket_data.fragment_buffer.items.len == 0) {
                     if (websocket_data.compression_status == .compressed_frame) {
